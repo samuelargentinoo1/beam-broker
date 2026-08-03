@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/rotinas",
+      "schedule": "0 11 * * *"
+    },
+    {
+      "path": "/api/cron/processar",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/whatsapp",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}

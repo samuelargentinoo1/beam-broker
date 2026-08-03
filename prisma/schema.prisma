@@ -1,0 +1,1297 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Neon: connection string com pooler
+  directUrl = env("DIRECT_URL") // Neon: conexão direta (sem pooler) p/ db push
+}
+
+// ─── Tenant: a imobiliária (SaaS multi-imobiliária) ─────────────────────────
+
+enum ModeloRemuneracao {
+  PERCENTUAL // taxa de administração mensal (% sobre o aluguel)
+  PRIMEIRO_ALUGUEL // a imobiliária fica com o primeiro aluguel; sem taxa mensal
+}
+
+model Imobiliaria {
+  id        Int     @id @default(autoincrement())
+  nome      String
+  cnpj      String?
+  telefone  String?
+  email     String?
+  municipio String?
+  uf        String?
+
+  // configurações de negócio (padrões — cada contrato pode sobrescrever)
+  modeloRemuneracao   ModeloRemuneracao @default(PERCENTUAL)
+  taxaAdmPercent      Decimal           @default(10) @db.Decimal(7, 4)
+  multaPercent        Decimal           @default(2) @db.Decimal(7, 4)
+  jurosMesPercent     Decimal           @default(1) @db.Decimal(7, 4)
+  seguroFiancaPercent Decimal           @default(11) @db.Decimal(7, 4) // % do aluguel, mensal, pago pelo inquilino
+  comissaoVendaPercent Decimal          @default(6) @db.Decimal(7, 4) // % sobre o valor da venda (intermediação)
+
+  // WhatsApp — roteamento multi-número:
+  // uazapi: token da instância (usado p/ enviar e p/ identificar o webhook)
+  uazapiToken           String? @unique
+  // Servidor uazapi desta imobiliária (ex.: https://free.uazapi.com). Se vazio,
+  // usa a env UAZAPI_URL e, por fim, o padrão free.uazapi.com.
+  uazapiUrl             String?
+
+  // Integrações por imobiliária (controle total pela tela de Configurações).
+  // Vazio = usa a env global correspondente; preenchido = usa o token da imob.
+  asaasApiKey     String? // gateway de cobrança (PIX/boleto/link) — Asaas
+  zapsignApiToken String? // assinatura digital de contratos — ZapSign
+  // ── Voz ────────────────────────────────────────────────────────────────
+  // A FALA da IA é gerada pela MiniMax; a TRANSCRIÇÃO do áudio que o cliente
+  // manda continua no ElevenLabs (com o serviço whisper como segundo fallback).
+  // São provedores diferentes de propósito: cada um no que faz melhor.
+  minimaxApiKey  String?
+  minimaxGroupId String? // GroupId da conta MiniMax (vai na query da API)
+  minimaxVoiceId String? // voz padrão (fallback quando a IA não tem voz própria)
+  // ElevenLabs: hoje só transcrição. Vazio = cai no serviço whisper (SCRAPER_URL).
+  elevenlabsApiKey  String?
+  /// OBSOLETO: voz do ElevenLabs. Mantido para não perder o histórico; a voz
+  /// que vale agora é minimaxVoiceId.
+  elevenlabsVoiceId String?
+  audioPct Int @default(40) // % das respostas que a IA manda em áudio
+  // Nome e voz de CADA IA (por agente), em JSON:
+  // {"VENDAS":{"nome":"Ana","voiceId":"..."},"CAPTACAO":{...}, ...}
+  // Sem entrada, a IA usa o nome padrão "Carol" e a voz padrão acima.
+  iasConfig String?
+
+  // Telefones dos CORRETORES (um por linha). Mensagem vinda desses números é
+  // atendida pela IA "Ajuda Corretor" (consulta interna da carteira), em vez do
+  // fluxo de cliente. Ex.: o corretor pergunta "quais imóveis temos em Dianópolis?".
+  telefonesCorretores String?
+
+  criadaEm DateTime @default(now())
+
+  // Cota mensal de custo de IA (USD). null = ilimitado. Ao estourar, os agentes
+  // devolvem uma mensagem neutra ao cliente final em vez de consumir mais API.
+  iaCotaMensalUsd Float?
+
+  // Acima deste custo, a ocorrência precisa do aval do proprietário antes da
+  // obra. Abaixo, a imobiliária resolve e informa depois. Padrão: R$ 300.
+  limiteAprovacaoOrcamentoCentavos Int @default(30000)
+
+  // ── Plano comercial e ciclo de vida da assinatura (painel do dono) ──────────
+  // O plano é uma embalagem de módulos; o que liga/desliga recurso é `modulos`,
+  // não o nome do plano. Ver lib/planos.ts.
+  planoId         Int?
+  plano           Plano?    @relation(fields: [planoId], references: [id])
+  modulos         String[]  @default([]) // ADM, COMERCIAL — definem o produto
+  addons          String[]  @default([]) // CAPTACAO — venda adicional sobre qualquer produto
+  assinaturaAtiva Boolean   @default(false)
+  trialAte        DateTime?
+  bloqueadaEm     DateTime? // conta bloqueada pelo dono (IA e painel suspensos)
+
+  // Ativação de primeiro uso (checklist do Dashboard)
+  regrasRevisadas     Boolean @default(false) // marcou/salvou as regras em Configurações
+  onboardingDispensado Boolean @default(false) // escondeu o checklist manualmente
+
+  usuarios    Usuario[]
+  pessoas     Pessoa[]
+  demandas    DemandaNaoAtendida[]
+  imoveis     Imovel[]
+  empreendimentos Empreendimento[]
+  leads       Lead[]
+  conversas   Conversa[]
+  documentos  Documento[]
+  lancamentos Lancamento[]
+  logs        LogAuditoria[]
+  contratos   Contrato[]
+  faturas     Fatura[]
+  usoIA       UsoIA[]
+  funis       Funil[]
+  negocios    Negocio[]
+  camposCrm   CampoPersonalizado[]
+}
+
+// ─── Operador do SaaS (o dono) ──────────────────────────────────────────────
+// NÃO é um Usuario. Usuario.imobiliariaId é obrigatório, então usar Usuario para
+// o dono o obrigaria a ser funcionário de alguma imobiliária — que entraria na
+// lista de clientes, no MRR e na cota de IA de um tenant real, e cujas ações
+// apareceriam na auditoria daquele cliente como se fossem da equipe dele.
+// Entidade separada mantém as queries multi-tenant intocadas (nenhum
+// imobiliariaId opcional espalhado pelo código).
+model Operador {
+  id             Int       @id @default(autoincrement())
+  nome           String
+  email          String    @unique
+  senhaHash      String // scrypt salt:hash
+  ativo          Boolean   @default(true)
+  sessaoVersao   Int       @default(0)
+  // 2FA (TOTP). totpSecret preenchido com totpAtivadoEm nulo = ativação
+  // pendente: o segredo já foi gerado mas ainda não foi confirmado com um
+  // código, então não vale como segundo fator.
+  totpSecret     String?
+  totpAtivadoEm  DateTime?
+  ultimoAcessoEm DateTime?
+  criadoEm       DateTime  @default(now())
+
+  acoes     AcaoOperador[]
+  recuperar CodigoRecuperacao[]
+}
+
+// Códigos de recuperação do 2FA: uso único, guardados só como hash (quem ler o
+// banco não entra). Mostrados uma única vez, na ativação.
+model CodigoRecuperacao {
+  id         Int       @id @default(autoincrement())
+  operadorId Int
+  operador   Operador  @relation(fields: [operadorId], references: [id], onDelete: Cascade)
+  codigoHash String
+  usadoEm    DateTime?
+  criadoEm   DateTime  @default(now())
+
+  @@index([operadorId, usadoEm])
+}
+
+// Trilha do dono, separada do LogAuditoria dos clientes.
+model AcaoOperador {
+  id            Int      @id @default(autoincrement())
+  operadorId    Int
+  operador      Operador @relation(fields: [operadorId], references: [id])
+  acao          String
+  imobiliariaId Int? // alvo, quando houver
+  detalhe       String?
+  ip            String?
+  em            DateTime @default(now())
+
+  @@index([operadorId, em])
+  @@index([imobiliariaId, em])
+}
+
+// Demanda que a IA identificou mas o cliente não contratou o módulo para
+// atender. É o melhor dado de venda que existe: o próprio número do cliente
+// dizendo quanto ele deixa na mesa. Registrado em vez de descartado.
+model DemandaNaoAtendida {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  modulo        String // "ADM" | "COMERCIAL" | "CAPTACAO"
+  conversaId    Int?
+  resumo        String // o que a pessoa queria, em uma linha
+  foraDoHorario Boolean     @default(false)
+  em            DateTime    @default(now())
+
+  @@index([imobiliariaId, em])
+}
+
+// Plano comercial (embalagem de módulos + preços). Espelha lib/planos.ts, que é
+// a fonte da verdade dos produtos; esta tabela materializa o plano de cada
+// imobiliária para consulta e faturamento. Preços SEMPRE em centavos (Int).
+model Plano {
+  id                              Int      @id @default(autoincrement())
+  nome                            String   @unique
+  mensalidadeCentavos             Int      @default(0)
+  setupCentavos                   Int      @default(0)
+  porContratoAtivoCentavos        Int      @default(0)
+  porLeadAtendidoCentavos         Int      @default(0)
+  cotaIaCentavos                  Int      @default(0)
+  multiplicadorExcedenteMilesimos Int      @default(0) // 1000 = 1x
+  aoEstourarCota                  String   @default("AVISAR") // AVISAR, COBRAR_EXCEDENTE, BLOQUEAR_IA
+  limiteUsuarios                  Int      @default(0) // 0 = ilimitado
+  limiteImoveis                   Int      @default(0) // 0 = ilimitado
+  modulos                         String[] @default([])
+  addons                          String[] @default([])
+  criadoEm                        DateTime @default(now())
+
+  imobiliarias Imobiliaria[]
+}
+
+// Telemetria de consumo de IA — uma linha por turno de conversa (pode agregar
+// várias chamadas do toolRunner). Base do custo variável do produto e da cota.
+model UsoIA {
+  id              Int         @id @default(autoincrement())
+  imobiliariaId   Int
+  imobiliaria     Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  agente          AgenteIA
+  modelo          String
+  inputTokens     Int         @default(0)
+  outputTokens    Int         @default(0)
+  cacheReadTokens Int         @default(0)
+  cacheWriteTokens Int        @default(0)
+  custoUsd        Float       @default(0)
+  criadoEm        DateTime    @default(now())
+
+  @@index([imobiliariaId, criadoEm])
+}
+
+// Captura das chamadas de webhook recebidas (diagnóstico do WhatsApp): guarda
+// o corpo bruto e o resultado, para ver o que a uazapi realmente envia.
+model WebhookLog {
+  id            Int      @id @default(autoincrement())
+  recebidoEm    DateTime @default(now())
+  provedor      String   @default("uazapi")
+  imobiliariaId Int?
+  telefone      String?
+  resultado     String // "processado: VENDAS", "ignorado: ...", "erro: ..."
+  corpo         String
+
+  @@index([recebidoEm])
+  @@index([imobiliariaId, recebidoEm])
+}
+
+// Idempotência de webhooks: guarda o id do evento já processado por provedor
+// (Asaas, ZapSign...). Provedores reenviam o mesmo evento; ao reencontrar a
+// chave, o webhook ignora em vez de processar de novo.
+model EventoWebhook {
+  provedor     String
+  eventoId     String
+  processadoEm DateTime @default(now())
+
+  @@id([provedor, eventoId])
+}
+
+enum StatusJob {
+  PENDENTE
+  PROCESSANDO
+  CONCLUIDO
+  ERRO
+}
+
+// Fila de jobs por tenant: o cron diario ENFILEIRA um job por imobiliaria e um
+// consumider processa alguns por invocacao — assim nenhuma imobiliaria segura as
+// outras e o timeout de 60s da Vercel passa a ser POR tenant, nao global.
+model FilaJob {
+  id            Int       @id @default(autoincrement())
+  tipo          String // "rotinas-tenant"
+  imobiliariaId Int
+  status        StatusJob @default(PENDENTE)
+  tentativas    Int       @default(0)
+  erro          String?
+  criadoEm      DateTime  @default(now())
+  processadoEm  DateTime?
+
+  @@index([status, criadoEm])
+}
+
+// Registro de execucao de job/rotina por tenant — responde "as faturas de julho
+// da imobiliaria X foram geradas?" sem adivinhar.
+model ExecucaoJob {
+  id            Int       @id @default(autoincrement())
+  tipo          String
+  imobiliariaId Int?
+  ok            Boolean   @default(false)
+  resultado     String? // JSON com o que foi feito
+  iniciadoEm    DateTime  @default(now())
+  terminadoEm   DateTime?
+
+  @@index([imobiliariaId, iniciadoEm])
+}
+
+// Rate limit do webhook por imobiliária (janela de 1 minuto). Uma linha por
+// (imobiliariaId, minuto); a contagem é incrementada a cada mensagem recebida.
+// Durável entre invocações serverless (in-memory não serve). Um loop de
+// mensagens não consome a conta da Anthropic além do limite.
+model WebhookRate {
+  imobiliariaId Int
+  janela        DateTime // início do minuto (UTC)
+  contagem      Int      @default(0)
+
+  @@id([imobiliariaId, janela])
+}
+
+model Usuario {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  nome          String
+  email         String      @unique
+  senhaHash     String // scrypt salt:hash
+  papel         String      @default("ADMIN") // ADMIN, FINANCEIRO, ATENDENTE
+  // Senha provisória: força a troca no primeiro acesso (ver exigirSessao).
+  precisaTrocarSenha Boolean @default(false)
+  // versão da sessão: incrementada por revogarSessoes() para invalidar todos os
+  // cookies existentes (troca de senha, logout global). O token carrega esta
+  // versão; getSessao compara com a do banco e rejeita se divergir.
+  sessaoVersao  Int         @default(0)
+  // verificação de e-mail: null = não verificado. A ENFORÇA de verificação
+  // depende de um provedor de e-mail configurado (ver lib/email.ts).
+  emailVerificadoEm DateTime?
+  criadoEm      DateTime    @default(now())
+
+  tokensEmail   TokenEmail[]
+  negocios      Negocio[]       @relation("NegociosResponsavel")
+  negociosTravados Negocio[]    @relation("NegociosTravados")
+  atividadesCrm AtividadeCrm[]  @relation("AtividadesResponsavel")
+  eventosCrm    EventoNegocio[] @relation("EventosAutor")
+}
+
+enum TipoTokenEmail {
+  VERIFICACAO
+  RESET_SENHA
+}
+
+// Tokens de e-mail (verificação de conta e redefinição de senha). Uso único,
+// com expiração. O valor é aleatório (crypto) — só quem recebe o e-mail tem.
+model TokenEmail {
+  id        Int            @id @default(autoincrement())
+  usuarioId Int
+  usuario   Usuario        @relation(fields: [usuarioId], references: [id])
+  tipo      TipoTokenEmail
+  token     String         @unique
+  expiraEm  DateTime
+  usadoEm   DateTime?
+  criadoEm  DateTime       @default(now())
+
+  @@index([usuarioId])
+}
+
+// Tentativas de login/cadastro para rate limit (por e-mail e por IP). Cada linha
+// é uma FALHA registrada; contamos as recentes numa janela para bloquear brute
+// force e criação de contas em massa. Limpas periodicamente.
+model TentativaLogin {
+  id    Int      @id @default(autoincrement())
+  chave String // "email:<x>", "ip:<x>", "cadastro:ip:<x>"
+  em    DateTime @default(now())
+
+  @@index([chave, em])
+}
+
+// ─── Pessoas ────────────────────────────────────────────────────────────────
+
+enum TipoPessoa {
+  FISICA
+  JURIDICA
+}
+
+model Pessoa {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  tipo          TipoPessoa  @default(FISICA)
+  nome          String
+  cpfCnpj       String
+  email         String?
+  telefone      String?
+  // dados bancários para repasse (proprietários)
+  banco         String?
+  agencia       String?
+  conta         String?
+  chavePix      String?
+  observacoes   String?
+  criadoEm      DateTime    @default(now())
+
+  imoveis    Imovel[]    @relation("ProprietarioImoveis")
+  contratos  Contrato[]  @relation("InquilinoContratos")
+  conversas  Conversa[]
+  documentos Documento[]
+  negocios   Negocio[]   @relation("NegociosContato")
+
+  @@unique([imobiliariaId, cpfCnpj])
+}
+
+// ─── Imóveis ────────────────────────────────────────────────────────────────
+
+enum StatusImovel {
+  DISPONIVEL
+  ALUGADO
+  EM_REFORMA
+  INATIVO
+}
+
+// Empreendimento: o prédio/condomínio na planta ou em obras. Não é imóvel — é o
+// que AGRUPA imóveis (as unidades). Fica separado porque a informação que
+// importa aqui é de OBRA e de ENQUADRAMENTO (construtora, entrega, MCMV), não de
+// unidade; e porque uma unidade herda tudo isso do empreendimento em vez de
+// repetir em cada cadastro.
+model Empreendimento {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  nome          String
+  construtora   String
+
+  // ── Localização ──────────────────────────────────────────────────────────
+  endereco String?
+  bairro   String?
+  cidade   String
+  uf       String
+  cep      String?
+  // Ponto de referência: como o cliente ACHA a obra. Endereço de terreno sem
+  // número não localiza ninguém — "em frente ao shopping X" localiza.
+  pontoReferencia String?
+  latitude        Float?
+  longitude       Float?
+
+  // ── Produto (o que a pessoa procura) ─────────────────────────────────────
+  quartos   Int?
+  banheiros Int?
+  suites    Int?
+  vagas     Int?
+
+  // ── Metragem e preço ─────────────────────────────────────────────────────
+  metragemM2     Float? // área privativa da unidade padrão (NÃO é dinheiro — Float)
+  precoAvaliacao Decimal? @db.Decimal(14, 2) // avaliação da unidade padrão
+
+  // ── Minha Casa Minha Vida ────────────────────────────────────────────────
+  // Faixas (1 a 4) em que o empreendimento se enquadra. Vazio = fora do MCMV.
+  // É lista porque um empreendimento costuma atender mais de uma faixa.
+  faixasMcmv Int[] @default([])
+
+  // ── Entrega: três datas que NÃO são a mesma coisa ────────────────────────
+  // 1) prevista  — o que a construtora promete (muda, e muda para pior)
+  // 2) contratual — obraIniciadaEm + prazoObraMeses; é a que gera direito
+  // 3) real      — só existe depois que entrega; até lá é null de propósito
+  obraIniciadaEm  DateTime? // assinatura do contrato / início efetivo da obra
+  prazoObraMeses  Int? // prazo contratual contado do início
+  toleranciaMeses Int       @default(6) // atraso tolerado em contrato (Lei 13.786/2018: até 180 dias)
+  entregaPrevista DateTime?
+  entregaReal     DateTime?
+
+  // ── Book (material de venda em PDF) ──────────────────────────────────────
+  // URL PÚBLICA: quem baixa o arquivo para mandar no WhatsApp é a uazapi, não
+  // o nosso servidor. Um book por empreendimento.
+  bookUrl  String?
+  bookNome String?
+
+  observacoes String?
+  criadoEm    DateTime @default(now())
+
+  imoveis Imovel[]
+  leads   Lead[]
+
+  @@unique([imobiliariaId, nome])
+  @@index([imobiliariaId, construtora])
+}
+
+model Imovel {
+  id              Int          @id @default(autoincrement())
+  imobiliariaId   Int
+  imobiliaria     Imobiliaria  @relation(fields: [imobiliariaId], references: [id])
+  codigo          String       // ex.: AP-0001 — único por imobiliária (ver @@unique abaixo)
+  tipo            String // Apartamento, Casa, Sala comercial...
+  endereco        String
+  bairro          String?
+  cidade          String
+  uf              String
+  cep             String?
+  status          StatusImovel @default(DISPONIVEL)
+  // finalidade do imóvel: LOCACAO (padrão), VENDA ou AMBOS — usado pela IA de
+  // compra e venda para saber o que oferecer a cada tipo de interessado.
+  finalidade      String       @default("LOCACAO")
+  // coordenadas (geocodificadas a partir do endereço/bairro) para a busca por
+  // proximidade — oferecer imóveis a até ~1-2 km do bairro pedido.
+  latitude        Float?
+  longitude       Float?
+  valorSugerido   Decimal? @db.Decimal(14, 2) // aluguel sugerido (locação)
+  valorVenda      Decimal? @db.Decimal(14, 2) // preço de venda (quando finalidade VENDA/AMBOS)
+  areaM2          Float? // área do imóvel em m² (NÃO é dinheiro — segue Float)
+  // Produto: é por estes campos que o comprador filtra de verdade.
+  quartos         Int?
+  banheiros       Int?
+  suites          Int?
+  vagas           Int?
+  valorCondominio Decimal? @db.Decimal(14, 2)
+  valorIptuMensal Decimal? @db.Decimal(14, 2)
+  observacoes     String?
+  criadoEm        DateTime     @default(now())
+
+  // Unidade de um empreendimento (opcional): herda construtora, entrega e
+  // enquadramento MCMV em vez de repetir esses campos em cada unidade.
+  empreendimentoId Int?
+  empreendimento   Empreendimento? @relation(fields: [empreendimentoId], references: [id])
+  // Identificação da unidade dentro do empreendimento: "Torre B — apto 402".
+  unidade          String?
+
+  proprietarioId Int
+  proprietario   Pessoa           @relation("ProprietarioImoveis", fields: [proprietarioId], references: [id])
+  contratos      Contrato[]
+  vistorias      Vistoria[]
+  documentos     Documento[]
+  leads          Lead[]
+  propostas      Proposta[]
+  ocorrencias    Ocorrencia[]
+  chaves         MovimentoChave[]
+  fotos          FotoImovel[]
+  propostasCompra PropostaCompra[]
+
+  @@unique([imobiliariaId, codigo])
+  // (o @@unique acima já cobre consultas por imobiliariaId sozinho)
+  @@index([imobiliariaId, status])
+  @@index([imobiliariaId, finalidade])
+  @@index([empreendimentoId])
+}
+
+// Fotos do imóvel — usadas na ficha e enviadas em lote pela IA de vendas
+// quando o interessado quer ver as opções.
+model FotoImovel {
+  id       Int      @id @default(autoincrement())
+  // token aleatório não-enumerável para servir a foto por /api/foto/<token>
+  // (o id sequencial permitia varrer a carteira de todos os tenants).
+  token    String   @unique @default(cuid())
+  imovelId Int
+  imovel   Imovel   @relation(fields: [imovelId], references: [id], onDelete: Cascade)
+  // URL pública: Vercel Blob (quando configurado) OU a rota /api/foto/<id> deste
+  // sistema quando a foto é guardada no banco (sem depender do Blob).
+  url      String
+  // fallback sem Blob: os bytes da imagem ficam aqui e são servidos por /api/foto.
+  dados    Bytes?
+  mimeType String?
+  legenda  String?
+  ordem    Int      @default(0)
+  criadoEm DateTime @default(now())
+
+  @@index([imovelId])
+}
+
+// ─── Contratos ──────────────────────────────────────────────────────────────
+
+enum StatusContrato {
+  ATIVO
+  ENCERRADO
+  RESCINDIDO
+}
+
+enum IndiceReajuste {
+  IGPM
+  IPCA
+  IVAR
+  NENHUM
+}
+
+enum StatusAssinatura {
+  NAO_ENVIADO
+  PENDENTE
+  ASSINADO
+}
+
+model Contrato {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  codigo        String // ex.: CT-0001 — único POR IMOBILIÁRIA (ver @@unique abaixo)
+  imovelId      Int
+  imovel        Imovel      @relation(fields: [imovelId], references: [id])
+  inquilinoId   Int
+  inquilino     Pessoa      @relation("InquilinoContratos", fields: [inquilinoId], references: [id])
+
+  inicio              DateTime
+  fim                 DateTime
+  valorAluguel        Decimal           @db.Decimal(14, 2)
+  diaVencimento       Int               @default(5)
+  // regras financeiras deste contrato (herdam o padrão da imobiliária)
+  modeloRemuneracao   ModeloRemuneracao @default(PERCENTUAL)
+  taxaAdmPercent      Decimal           @default(10) @db.Decimal(7, 4) // % sobre o aluguel (modelo PERCENTUAL)
+  multaPercent        Decimal           @default(2) @db.Decimal(7, 4)
+  jurosMesPercent     Decimal           @default(1) @db.Decimal(7, 4)
+  seguroFiancaPercent Decimal           @default(0) @db.Decimal(7, 4) // % do aluguel cobrado mensalmente do inquilino (garantia seguro-fiança)
+  indiceReajuste      IndiceReajuste    @default(IGPM)
+  garantia            String? // caução, fiador, seguro-fiança...
+  status              StatusContrato    @default(ATIVO)
+  encerradoEm         DateTime?
+  observacoes         String?
+  criadoEm            DateTime          @default(now())
+
+  // assinatura digital (ZapSign ou modo demo)
+  assinaturaStatus StatusAssinatura @default(NAO_ENVIADO)
+  assinaturaId     String?          @unique
+  assinaturaLink   String? // link de assinatura do INQUILINO (1º signatário)
+  assinaturaLinkProprietario String? // link do PROPRIETÁRIO (2º signatário) — p/ reenvio
+  assinadoEm       DateTime?
+
+  faturas     Fatura[]
+  reajustes   Reajuste[]
+  documentos  Documento[]
+  ocorrencias Ocorrencia[]
+  seguros     Seguro[]
+  aditivos    Aditivo[]
+  acordos     Acordo[]
+
+  @@unique([imobiliariaId, codigo])
+  @@index([imobiliariaId, status])
+  @@index([imovelId])
+}
+
+model Reajuste {
+  id            Int      @id @default(autoincrement())
+  contratoId    Int
+  contrato      Contrato @relation(fields: [contratoId], references: [id])
+  data          DateTime @default(now())
+  indice        String // IGPM, IPCA...
+  percentual    Decimal  @db.Decimal(7, 4) // ex.: 4.52 (%)
+  valorAnterior Decimal  @db.Decimal(14, 2)
+  valorNovo     Decimal  @db.Decimal(14, 2)
+}
+
+// ─── Financeiro ─────────────────────────────────────────────────────────────
+
+enum StatusFatura {
+  ABERTA
+  PAGA
+  ATRASADA
+  CANCELADA
+}
+
+model Fatura {
+  id                Int          @id @default(autoincrement())
+  imobiliariaId     Int
+  imobiliaria       Imobiliaria  @relation(fields: [imobiliariaId], references: [id])
+  contratoId        Int
+  contrato          Contrato     @relation(fields: [contratoId], references: [id])
+  competencia       String // "2026-07"
+  vencimento        DateTime
+  valorAluguel      Decimal      @db.Decimal(14, 2)
+  valorEncargos     Decimal      @default(0) @db.Decimal(14, 2) // condomínio, IPTU etc. quando administrados
+  valorSeguroFianca Decimal      @default(0) @db.Decimal(14, 2) // repassado à seguradora, fora do repasse ao proprietário
+  valorMulta        Decimal      @default(0) @db.Decimal(14, 2)
+  valorJuros        Decimal      @default(0) @db.Decimal(14, 2)
+  valorTotal        Decimal      @db.Decimal(14, 2)
+  status            StatusFatura @default(ABERTA)
+  pagaEm            DateTime?
+  valorPago         Decimal?     @db.Decimal(14, 2)
+  formaPagamento    String? // BOLETO, PIX, CARTAO
+  criadoEm          DateTime     @default(now())
+
+  // cobrança emitida no gateway (Asaas ou modo demo)
+  gatewayId      String? @unique
+  pixCopiaECola  String?
+  linhaDigitavel String?
+  linkPagamento  String?
+
+  categoria String  @default("ALUGUEL") // ALUGUEL, ACORDO, RESCISAO
+  acordoId  Int?
+  acordo    Acordo? @relation(fields: [acordoId], references: [id])
+
+  // última cobrança da régua enviada por esta fatura — idempotência (não reenvia
+  // se já cobrou há menos de N dias).
+  ultimaCobrancaEm DateTime?
+
+  repasse Repasse?
+
+  @@unique([contratoId, competencia])
+  @@index([imobiliariaId, status])
+  @@index([contratoId, status])
+}
+
+enum StatusRepasse {
+  PENDENTE
+  PAGO
+}
+
+model Repasse {
+  id             Int           @id @default(autoincrement())
+  faturaId       Int           @unique
+  fatura         Fatura        @relation(fields: [faturaId], references: [id])
+  valorBase      Decimal       @db.Decimal(14, 2) // valor pago pelo inquilino
+  valorTaxaAdm   Decimal       @db.Decimal(14, 2) // receita da administradora
+  valorDescontos Decimal       @default(0) @db.Decimal(14, 2) // despesas do imóvel abatidas
+  valorRepasse   Decimal       @db.Decimal(14, 2) // líquido ao proprietário
+  status         StatusRepasse @default(PENDENTE)
+  pagoEm         DateTime?
+  criadoEm       DateTime      @default(now())
+}
+
+enum TipoLancamento {
+  RECEITA
+  DESPESA
+}
+
+model Lancamento {
+  id            Int            @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria    @relation(fields: [imobiliariaId], references: [id])
+  tipo          TipoLancamento
+  categoria     String // Taxa de administração, Repasse, Comissão, Despesa operacional...
+  descricao     String
+  valor         Decimal        @db.Decimal(14, 2)
+  data          DateTime       @default(now())
+  criadoEm      DateTime       @default(now())
+
+  @@index([imobiliariaId, tipo, data])
+}
+
+// ─── Documentação / Vistorias ───────────────────────────────────────────────
+
+model Vistoria {
+  id       Int      @id @default(autoincrement())
+  imovelId Int
+  imovel   Imovel   @relation(fields: [imovelId], references: [id])
+  tipo     String // ENTRADA, SAIDA, PERIODICA
+  data     DateTime @default(now())
+  laudo    String?
+}
+
+model Documento {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  nome          String
+  categoria     String // CONTRATO, LAUDO, RG_CPF, COMPROVANTE...
+  validade      DateTime?
+  arquivo       String? // caminho no storage (uploads/)
+  mimeType      String?
+  tamanho       Int? // bytes
+  criadoEm      DateTime    @default(now())
+  pessoaId      Int?
+  pessoa        Pessoa?     @relation(fields: [pessoaId], references: [id])
+  imovelId      Int?
+  imovel        Imovel?     @relation(fields: [imovelId], references: [id])
+  contratoId    Int?
+  contrato      Contrato?   @relation(fields: [contratoId], references: [id])
+
+  @@index([imobiliariaId])
+}
+
+// ─── CRM de locação ─────────────────────────────────────────────────────────
+
+// Etapas do funil. A divisão IA x CORRETOR está em lib/crm.ts: a IA vai do
+// primeiro contato até marcar a visita; do "marcada" em diante é o corretor.
+enum StatusLead {
+  NOVO // IA: chegou
+  ATENDIMENTO // IA: qualificando
+  VISITA_AGENDADA // entrega: a IA marcou, o corretor assume
+  EM_ATENDIMENTO // corretor: assumiu o lead
+  COMPARECIMENTO // corretor: compareceu à visita
+  PROPOSTA // corretor: proposta em negociação
+  FECHADO // corretor: fechou
+  PERDIDO
+}
+
+enum TemperaturaLead {
+  FRIO
+  MORNO
+  QUENTE
+}
+
+model Lead {
+  id            Int             @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria     @relation(fields: [imobiliariaId], references: [id])
+  nome          String
+  telefone      String?
+  email         String?
+  origem        String          @default("SITE") // SITE, PORTAL, INDICACAO, FACEBOOK, WHATSAPP...
+  status        StatusLead      @default(NOVO)
+  temperatura   TemperaturaLead @default(MORNO)
+  // finalidade do interesse: LOCACAO (padrão) ou COMPRA — separa o funil de
+  // locação do funil de compra e venda (4ª IA).
+  finalidade    String          @default("LOCACAO")
+  imovelId      Int?
+  imovel        Imovel?         @relation(fields: [imovelId], references: [id])
+  // Interesse em EMPREENDIMENTO (na planta): na planta ainda não existe unidade,
+  // então o lead aponta para o prédio. É este campo que dispara a qualificação
+  // de financiamento — ver lib/qualificacao.ts.
+  empreendimentoId Int?
+  empreendimento   Empreendimento? @relation(fields: [empreendimentoId], references: [id])
+  qualificacao     QualificacaoMcmv?
+  visitaEm      DateTime? // visita agendada
+  observacoes   String?
+  // motor de follow-up: quando disparar o próximo toque e em que etapa da
+  // cadência (0..5) o lead está. followUpEm=null com etapa>=5 ⇒ cadência encerrada.
+  followUpEm    DateTime? // quando disparar o próximo toque automático
+  followUpEtapa Int             @default(0) // toque atual da cadência (0 = ainda não iniciada)
+  // Retomada agendada: o lead pediu para voltar numa data (hoje: previsão de
+  // quitação de nome restrito). Enquanto retomarEm está no futuro, a cadência
+  // de 5 toques fica MUDA — insistir com quem não pode financiar só queima o
+  // contato. Na data, a Carol volta uma vez e a cadência normal recomeça.
+  retomarEm     DateTime?
+  retomarMotivo String?
+  criadoEm      DateTime        @default(now())
+  atualizadoEm  DateTime        @updatedAt
+
+  propostas       Proposta[]
+  propostasCompra PropostaCompra[]
+
+  @@index([imobiliariaId, status])
+  @@index([followUpEm])
+  @@index([empreendimentoId])
+}
+
+// Qualificação de financiamento do comprador — o que decide se ele COMPRA de
+// verdade, e não só se ele gostou do apartamento. Existe separada do Lead
+// porque só vale para o funil de compra (empreendimento/financiamento), e
+// porque é um formulário que se preenche aos poucos: cada campo é opcional
+// até a pessoa responder. Ver lib/qualificacao.ts para as perguntas na ordem.
+model QualificacaoMcmv {
+  id     Int  @id @default(autoincrement())
+  leadId Int  @unique
+  lead   Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // 1) primeiro imóvel? (ter outro imóvel no nome barra o MCMV)
+  primeiroImovel Boolean?
+  // 2) vínculo: CLT, AUTONOMO, MEI, EMPRESARIO, APOSENTADO, SERVIDOR
+  vinculo        String?
+  // 3) 3 anos ou mais de registro (libera uso do FGTS e o Pró-Cotista)
+  tresAnosRegistro Boolean?
+  // 4) dependentes
+  dependentes    Int?
+  // 5) renda bruta familiar mensal — define a faixa
+  rendaBrutaMensal Decimal? @db.Decimal(14, 2)
+  // 6) nascimento — a idade limita o PRAZO do financiamento
+  dataNascimento DateTime?
+  // 7) tem FGTS
+  temFgts        Boolean?
+  // 8) estado civil — casado muda a coleta: entram os dados e os documentos do
+  // cônjuge, e a renda dele compõe a renda familiar.
+  estadoCivil    String?
+  // 9) a renda declarada foi para o IR? Renda que não aparece no imposto de
+  // renda o banco não enxerga — é o que derruba análise de autônomo.
+  rendaDeclaradaIr Boolean?
+
+  // Cônjuge (só quando casado/união estável)
+  // Imóvel no nome do cônjuge tira o CASAL do MCMV: no financiamento os dois
+  // entram como compradores, então o imóvel dele conta como se fosse dos dois.
+  conjugeImovelProprio    Boolean?
+  conjugeNome             String?
+  conjugeVinculo          String?
+  conjugeRendaBrutaMensal Decimal?  @db.Decimal(14, 2)
+  conjugeDataNascimento   DateTime?
+
+  // ── Restrição de nome (Serasa/SPC) ───────────────────────────────────────
+  // Nome restrito NÃO financia. Só há dois caminhos: outra pessoa entra como
+  // titular, ou espera-se a quitação. Insistir na conversa não abre nenhum dos
+  // dois — por isso a escada PARA aqui até um deles aparecer.
+  nomeRestrito     Boolean?
+  previsaoQuitacao DateTime? // quando a pessoa espera quitar; é a data da volta
+  // Tri-estado de propósito: null é "ainda não perguntei", false é "perguntei e
+  // não tem ninguém". Sem essa distinção a IA reperguntaria para sempre — que é
+  // exatamente o "a IA insiste" que motivou esta regra.
+  temOutroTitular  Boolean?
+  nomeAlternativo  String? // nome de quem entra no lugar; só quando temOutroTitular
+
+  // ── Produto: o que a pessoa quer, perguntado ANTES do financeiro ─────────
+  quartosDesejados    Int?
+  banheirosDesejados  Int?
+  localizacaoDesejada String?
+
+  // Entrada. `entradaDisponivel = 0` é resposta ("não tenho"), diferente de
+  // null ("ainda não perguntei") — e é o zero que abre querParcelarEntrada.
+  entradaDisponivel Decimal? @db.Decimal(14, 2)
+  // Sem entrada, quer parcelar? Só empreendimento NÃO ENTREGUE parcela entrada
+  // (direto com a construtora). Pronto exige entrada à vista.
+  querParcelarEntrada Boolean?
+  parcelaDesejada     Decimal? @db.Decimal(14, 2)
+
+  // Documentos entregues (chaves de DOCUMENTOS em lib/qualificacao.ts).
+  documentosRecebidos String[] @default([])
+
+  observacoes  String?
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+}
+
+enum StatusProposta {
+  EM_ANALISE
+  APROVADA
+  RECUSADA
+  CONVERTIDA
+}
+
+model Proposta {
+  id               Int            @id @default(autoincrement())
+  leadId           Int?
+  lead             Lead?          @relation(fields: [leadId], references: [id])
+  imovelId         Int
+  imovel           Imovel         @relation(fields: [imovelId], references: [id])
+  nome             String // pretendente
+  cpfCnpj          String
+  rendaMensal      Decimal?       @db.Decimal(14, 2)
+  valorProposto    Decimal        @db.Decimal(14, 2)
+  prazoMeses       Int            @default(30)
+  garantia         String?
+  scoreCredito     Int? // análise de crédito
+  resultadoCredito String? // APROVADO, APROVADO_COM_RESSALVA, REPROVADO
+  status           StatusProposta @default(EM_ANALISE)
+  contratoId       Int? // preenchido na conversão
+  criadoEm         DateTime       @default(now())
+}
+
+// Proposta de COMPRA de imóvel (funil de compra e venda — 4ª IA). Diferente da
+// Proposta de locação: aqui há oferta de preço, forma de pagamento e negociação
+// (contraproposta). Não gera contrato de locação; sinaliza a venda para a equipe.
+enum StatusPropostaCompra {
+  EM_ANALISE
+  CONTRAPROPOSTA
+  ACEITA
+  RECUSADA
+}
+
+model PropostaCompra {
+  id             Int                  @id @default(autoincrement())
+  imobiliariaId  Int
+  leadId         Int?
+  lead           Lead?                @relation(fields: [leadId], references: [id])
+  imovelId       Int
+  imovel         Imovel               @relation(fields: [imovelId], references: [id])
+  nome           String // comprador
+  cpfCnpj        String?
+  telefone       String?
+  valorOfertado  Decimal              @db.Decimal(14, 2)
+  formaPagamento String? // A_VISTA, FINANCIAMENTO, FGTS, PERMUTA...
+  entrada        Decimal?             @db.Decimal(14, 2) // valor de entrada (financiamento)
+  status         StatusPropostaCompra @default(EM_ANALISE)
+  observacoes    String?
+  criadoEm       DateTime             @default(now())
+
+  @@index([imobiliariaId])
+}
+
+// ─── Operação ───────────────────────────────────────────────────────────────
+
+enum StatusOcorrencia {
+  ABERTA
+  EM_ANDAMENTO
+  CONCLUIDA
+}
+
+enum ResponsavelCusto {
+  PROPRIETARIO
+  INQUILINO
+  IMOBILIARIA
+}
+
+model Ocorrencia {
+  id               Int               @id @default(autoincrement())
+  imovelId         Int
+  imovel           Imovel            @relation(fields: [imovelId], references: [id])
+  contratoId       Int?
+  contrato         Contrato?         @relation(fields: [contratoId], references: [id])
+  titulo           String
+  descricao        String?
+  status           StatusOcorrencia  @default(ABERTA)
+  custo            Decimal?          @db.Decimal(14, 2)
+  responsavelCusto ResponsavelCusto?
+  cobradaEm        DateTime? // quando o custo foi lançado (fatura ou repasse)
+  criadaEm         DateTime          @default(now())
+  concluidaEm      DateTime?
+
+  // Aprovação do proprietário (M4): acima do limite da imobiliária, a obra
+  // depende do "sim" dele — pedido e registrado pelo WhatsApp.
+  aguardandoAprovacao Boolean   @default(false)
+  aprovadaEm          DateTime?
+  aprovadaPorPessoaId Int?
+  decisaoObservacao   String?
+  // Idempotência do aviso: garante no máximo UMA notificação por ocorrência.
+  proprietarioAvisadoEm DateTime?
+  // Aviso pedido fora do horário comercial: fica agendado e sai na próxima
+  // abertura (ninguém recebe cobrança de madrugada).
+  avisoAgendadoPara     DateTime?
+  avisoTexto            String?
+
+  @@index([imovelId, status])
+}
+
+model MovimentoChave {
+  id                Int       @id @default(autoincrement())
+  imovelId          Int
+  imovel            Imovel    @relation(fields: [imovelId], references: [id])
+  retiradaPor       String
+  telefone          String?
+  retiradaEm        DateTime  @default(now())
+  devolucaoPrevista DateTime?
+  devolvidaEm       DateTime?
+  observacoes       String?
+}
+
+model Seguro {
+  id         Int      @id @default(autoincrement())
+  contratoId Int
+  contrato   Contrato @relation(fields: [contratoId], references: [id])
+  tipo       String // INCENDIO, FIANCA, CAPITALIZACAO...
+  seguradora String
+  apolice    String?
+  inicio     DateTime
+  fim        DateTime
+  valor      Decimal? @db.Decimal(14, 2)
+  criadoEm   DateTime @default(now())
+}
+
+// ─── Jurídico ───────────────────────────────────────────────────────────────
+
+enum TipoAditivo {
+  RENOVACAO
+  VALOR
+  GARANTIA
+  OUTRO
+}
+
+model Aditivo {
+  id         Int         @id @default(autoincrement())
+  contratoId Int
+  contrato   Contrato    @relation(fields: [contratoId], references: [id])
+  tipo       TipoAditivo
+  descricao  String
+  novoValor  Decimal?    @db.Decimal(14, 2)
+  novoFim    DateTime?
+  criadoEm   DateTime    @default(now())
+}
+
+model Acordo {
+  id            Int      @id @default(autoincrement())
+  contratoId    Int
+  contrato      Contrato @relation(fields: [contratoId], references: [id])
+  valorOriginal Decimal  @db.Decimal(14, 2) // soma das faturas em atraso na data
+  valorAcordado Decimal  @db.Decimal(14, 2)
+  parcelas      Int
+  observacoes   String?
+  criadoEm      DateTime @default(now())
+
+  faturas Fatura[]
+}
+
+model LogAuditoria {
+  id            Int          @id @default(autoincrement())
+  imobiliariaId Int?
+  imobiliaria   Imobiliaria? @relation(fields: [imobiliariaId], references: [id])
+  // usuário da sessão que executou a ação (quando aplicável) — quem mexeu no
+  // dinheiro/no contrato, não só o quê.
+  usuarioId     Int?
+  acao          String // ex.: FATURA_PAGA, CONTRATO_CRIADO, ACORDO_CRIADO...
+  entidade      String
+  entidadeId    Int?
+  detalhes      String?
+  criadoEm      DateTime     @default(now())
+
+  @@index([imobiliariaId, criadoEm])
+}
+
+// ─── Atendimento (IA) ───────────────────────────────────────────────────────
+
+enum PerfilConversa {
+  LOCATARIO
+  PROPRIETARIO
+}
+
+enum AgenteIA {
+  RECEPCAO // triagem: qualifica o lead vago e encaminha ao agente certo
+  ADMINISTRACAO // atende locatários e proprietários da carteira
+  CAPTACAO // capta imóveis: cadastra proprietários e imóveis
+  VENDAS // vende locação: leads, visitas e propostas
+  COMPRA_VENDA // compra e venda de imóveis: compradores, vendedores, propostas de compra
+  AJUDA_CORRETOR // assistente interno dos corretores: consulta a carteira pelo WhatsApp
+}
+
+enum AutorMensagem {
+  CLIENTE
+  IA
+  ATENDENTE
+}
+
+model Conversa {
+  id               Int             @id @default(autoincrement())
+  imobiliariaId    Int
+  imobiliaria      Imobiliaria     @relation(fields: [imobiliariaId], references: [id])
+  agente           AgenteIA        @default(ADMINISTRACAO)
+  // administração: vinculada a uma pessoa da carteira
+  pessoaId         Int?
+  pessoa           Pessoa?         @relation(fields: [pessoaId], references: [id])
+  perfil           PerfilConversa?
+  // captação/vendas: contato pode não ter cadastro ainda
+  contatoNome      String?
+  contatoTelefone  String?
+  // JID exato para responder no WhatsApp (ex.: 5517...@s.whatsapp.net ou
+  // ...@lid para número não salvo). Guardado para a IA enviar texto E fotos
+  // para o destino certo, mesmo quando o contato só tem LID.
+  contatoJid       String?
+  canal            String          @default("WHATSAPP")
+  // handoff humano: quando a equipe assume ESTA conversa, a IA fica quieta só
+  // aqui (as outras seguem no automático) até reativarem pelo painel.
+  iaPausada        Boolean         @default(false)
+  // Conversa de SIMULAÇÃO (simulador do painel do dono): roda o agente de
+  // verdade, mas fica fora do painel de atendimento do cliente e das métricas
+  // de operação — é ensaio, não atendimento.
+  simulacao        Boolean         @default(false)
+  // memória de longo prazo: resumo do que a IA já sabe deste contato
+  memoria          String?
+  memoriaMensagens Int             @default(0) // nº de mensagens já resumidas
+  criadaEm         DateTime        @default(now())
+  atualizadaEm     DateTime        @updatedAt
+
+  mensagens Mensagem[]
+
+  @@unique([pessoaId, perfil])
+  @@unique([imobiliariaId, contatoTelefone, agente])
+  // o @@unique acima cobre lookups por (imobiliariaId, contatoTelefone); este
+  // serve a lista do painel ordenada por atualizadaEm dentro do tenant.
+  @@index([imobiliariaId, atualizadaEm])
+}
+
+model Mensagem {
+  id         Int           @id @default(autoincrement())
+  conversaId Int
+  conversa   Conversa      @relation(fields: [conversaId], references: [id])
+  autor      AutorMensagem
+  texto      String
+  // nota de voz (áudio) desta mensagem — servida por /api/mensagem-audio/<id>
+  // para o painel tocar. Na IA é a voz gerada; no cliente é o áudio recebido.
+  // audioUrl: mídia no Vercel Blob (produção). audioDados: bytes no banco (só dev
+  // ou legado, migrável por scripts/migrar-midia-para-blob.mjs). audioMime: tipo.
+  audioUrl   String?
+  audioDados Bytes?
+  audioMime  String?
+  criadaEm   DateTime      @default(now())
+
+  @@index([conversaId, criadaEm])
+}
+
+// ─── CRM: Negócios ──────────────────────────────────────────────────────────
+//
+// O funil é DADO, não constante de código: cada imobiliária desenha as fases
+// que usa (Prospecto, Contato, Qualificado, Reunião, Negociação…) e pode ter
+// mais de um funil (Outbound, Inbound). Por isso Funil/FaseFunil são tabelas, e
+// não um enum — trocar a régua não pode exigir migration.
+//
+// Só PESSOA FÍSICA: não existe empresa vinculada ao negócio, por decisão de
+// produto. O contato aponta para Pessoa (o cadastro único do sistema).
+
+model Funil {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  nome          String
+  ordem         Int         @default(0)
+  criadoEm      DateTime    @default(now())
+
+  fases    FaseFunil[]
+  negocios Negocio[]
+
+  @@unique([imobiliariaId, nome])
+}
+
+model FaseFunil {
+  id      Int    @id @default(autoincrement())
+  funilId Int
+  funil   Funil  @relation(fields: [funilId], references: [id], onDelete: Cascade)
+  nome    String
+  ordem   Int    @default(0)
+
+  negocios Negocio[]
+
+  @@unique([funilId, nome])
+  @@index([funilId, ordem])
+}
+
+enum ResultadoNegocio {
+  ABERTO
+  GANHO
+  PERDIDO
+}
+
+model Negocio {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  funilId       Int
+  funil         Funil       @relation(fields: [funilId], references: [id])
+  faseId        Int
+  fase          FaseFunil   @relation(fields: [faseId], references: [id])
+
+  titulo String
+  valor  Decimal? @db.Decimal(12, 2) // null = "Sem valor" no card
+
+  dataPrevista DateTime?
+
+  responsavelId Int?
+  responsavel   Usuario? @relation("NegociosResponsavel", fields: [responsavelId], references: [id])
+
+  // Contato do negócio. Pessoa é o cadastro único; contatoNome/Telefone existem
+  // para o negócio criado antes de a pessoa virar cadastro.
+  contatoId       Int?
+  contato         Pessoa? @relation("NegociosContato", fields: [contatoId], references: [id])
+  contatoNome     String?
+  contatoTelefone String?
+
+  resultado ResultadoNegocio @default(ABERTO)
+  fechadoEm DateTime?
+  // Perder sem motivo não vira aprendizado: é este campo que alimenta o gráfico
+  // de motivos de perda do painel do dono. Obrigatório na UI ao marcar perda.
+  motivoPerda String?
+
+  // Trava do lead: enquanto vale, o negócio é de um corretor só. Evita dois
+  // corretores ligando para o mesmo cliente no mesmo dia.
+  travadoPorId Int?
+  travadoPor   Usuario?  @relation("NegociosTravados", fields: [travadoPorId], references: [id])
+  travadoAte   DateTime?
+
+  // Probabilidade da etapa (0..1) — base da previsão ponderada do mês.
+  probabilidade Decimal @default(0.3) @db.Decimal(4, 3)
+
+  // Quando o negócio ENTROU na fase atual — é daqui que sai "dias na fase" do
+  // card. Guardar a data é mais barato e mais confiável que varrer a timeline.
+  faseDesde DateTime @default(now())
+  criadoEm  DateTime @default(now())
+
+  atividades AtividadeCrm[]
+  eventos    EventoNegocio[]
+  campos     ValorCampoNegocio[]
+
+  @@index([imobiliariaId, funilId, faseId])
+  @@index([imobiliariaId, resultado])
+}
+
+// Campos personalizados ("Quiz Raio-X"): a imobiliária define as perguntas e
+// cada negócio guarda a resposta. Definição e valor em tabelas separadas para
+// que renomear/reordenar uma pergunta não toque nos negócios.
+model CampoPersonalizado {
+  id            Int         @id @default(autoincrement())
+  imobiliariaId Int
+  imobiliaria   Imobiliaria @relation(fields: [imobiliariaId], references: [id])
+  nome          String
+  tipo          String      @default("TEXTO") // TEXTO | NUMERO | DATA | OPCOES
+  opcoes        String? // separadas por ";" — só para tipo OPCOES
+  ordem         Int         @default(0)
+
+  valores ValorCampoNegocio[]
+
+  @@unique([imobiliariaId, nome])
+}
+
+model ValorCampoNegocio {
+  id        Int                @id @default(autoincrement())
+  negocioId Int
+  negocio   Negocio            @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  campoId   Int
+  campo     CampoPersonalizado @relation(fields: [campoId], references: [id], onDelete: Cascade)
+  valor     String
+
+  @@unique([negocioId, campoId])
+}
+
+enum StatusAtividade {
+  PENDENTE
+  CONCLUIDA
+}
+
+// Atividade agendada no negócio. De propósito só três campos obrigatórios —
+// nome, quando e responsável: formulário curto é formulário preenchido.
+model AtividadeCrm {
+  id        Int      @id @default(autoincrement())
+  negocioId Int
+  negocio   Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  titulo    String
+  quando    DateTime
+  tipo      String   @default("TAREFA") // TAREFA | LIGACAO | EMAIL | REUNIAO | VISITA
+
+  responsavelId Int?
+  responsavel   Usuario? @relation("AtividadesResponsavel", fields: [responsavelId], references: [id])
+
+  status      StatusAtividade @default(PENDENTE)
+  concluidaEm DateTime?
+  criadoEm    DateTime        @default(now())
+
+  @@index([negocioId, status, quando])
+}
+
+// Linha do tempo do negócio. Tudo o que acontece vira evento aqui — é o
+// histórico que a tela filtra por Todas / E-mail / Notas / Atividades.
+model EventoNegocio {
+  id        Int     @id @default(autoincrement())
+  negocioId Int
+  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  // NEGOCIO_CRIADO | FASE_ALTERADA | NOTA | ATIVIDADE_CONCLUIDA | EMAIL | GANHO | PERDIDO
+  tipo    String
+  titulo  String
+  detalhe String?
+
+  autorId Int?
+  autor   Usuario? @relation("EventosAutor", fields: [autorId], references: [id])
+
+  em DateTime @default(now())
+
+  @@index([negocioId, em])
+}

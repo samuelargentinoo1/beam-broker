@@ -1,0 +1,614 @@
+@import "tailwindcss";
+
+/* ─── Fontes (auto-hospedadas) ──────────────────────────────────────────── */
+@font-face {
+  font-family: "Figtree";
+  src: url("/fonts/figtree-var.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jbmono-var.woff2") format("woff2");
+  font-weight: 500 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* Identidade Beam — espelha o :root de beambroker.com.br */
+  --beam-bg: #07080B;
+  --beam-fg: #F4F5F7;
+  --beam-accent: #34C46A;
+  --beam-accent-soft: #8CF0B0;
+  --beam-card-green: #0B3A21;
+  --beam-blue: #1D5CF5;
+  --beam-muted: #7A828F;
+  --beam-faint: #9AA2AF;
+  --beam-surface: #12141A;
+  --beam-line: #1E222B;
+
+  --font-sans: Figtree, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ─── Base ──────────────────────────────────────────────────────────────── */
+html {
+  background: #07080b;
+}
+body {
+  margin: 0;
+  /* Malha discreta do site da Beam: dá profundidade ao fundo quase preto sem
+     competir com o conteúdo. */
+  background-color: #07080b;
+  background-image:
+    linear-gradient(to right, rgba(244, 245, 247, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(244, 245, 247, 0.02) 1px, transparent 1px);
+  background-size: 48px 48px;
+  color: #F4F5F7;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: #34c46a;
+  text-decoration: none;
+}
+a:hover {
+  color: #8cf0b0;
+}
+::selection {
+  background: rgba(52,196,106, 0.15);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a303b;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b9c0c9;
+}
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid #34c46a;
+  outline-offset: 1px;
+}
+main {
+  scroll-behavior: smooth;
+}
+h1,
+h2,
+h3 {
+  font-optical-sizing: auto;
+}
+
+/* Utilitários de tipografia do design system */
+.font-data,
+.label-caps {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.label-caps {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ─── Animações ─────────────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes dash {
+  from {
+    stroke-dashoffset: 260;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes gauge {
+  from {
+    stroke-dashoffset: 163.4;
+  }
+}
+@keyframes pulseDot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(52,196,106, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(52,196,106, 0);
+  }
+}
+.sobe {
+  animation: fadeUp 0.6s ease both;
+}
+.pulse-dot {
+  animation: pulseDot 2.4s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ─── Aurora de fundo ───────────────────────────────────────────────────── */
+@keyframes auroraA {
+  0%,
+  100% {
+    transform: translate(-4%, -3%) scale(1);
+  }
+  50% {
+    transform: translate(4%, 5%) scale(1.14);
+  }
+}
+@keyframes auroraB {
+  0%,
+  100% {
+    transform: translate(3%, 4%) scale(1.06);
+  }
+  50% {
+    transform: translate(-5%, -4%) scale(0.94);
+  }
+}
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  z-index: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  filter: blur(80px);
+}
+body::before {
+  width: 54vw;
+  height: 54vw;
+  top: -24vw;
+  right: -16vw;
+  background: radial-gradient(circle, rgba(52,196,106, 0.055), transparent 65%);
+  animation: auroraA 24s ease-in-out infinite;
+}
+body::after {
+  width: 48vw;
+  height: 48vw;
+  bottom: -22vw;
+  left: -14vw;
+  background: radial-gradient(circle, rgba(52,196,106, 0.04), transparent 65%);
+  animation: auroraB 28s ease-in-out infinite;
+}
+
+/* ─── Cards ─────────────────────────────────────────────────────────────── */
+.carta {
+  background: #12141a;
+  border: 1px solid #1e222b;
+  border-radius: 22px;
+  transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s;
+}
+.carta:hover {
+  border-color: rgba(52, 196, 106, 0.35);
+  box-shadow: 0 20px 44px -22px rgba(0, 0, 0, 0.85);
+  transform: translateY(-4px);
+}
+
+/* ─── Inputs ────────────────────────────────────────────────────────────── */
+.input-ds {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 14px;
+  border: 1px solid #2a303b;
+  background: #12141A;
+  padding: 9px 13px;
+  font-size: 13.5px;
+  font-family: var(--font-sans);
+  color: #F4F5F7;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input-ds:focus {
+  border-color: #34c46a;
+  box-shadow: 0 0 0 3px rgba(52,196,106, 0.12);
+}
+
+/* ─── Dock flutuante (menu inferior) ────────────────────────────────────── */
+@keyframes floatDock {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(-2px);
+  }
+  50% {
+    transform: translateX(-50%) translateY(3px);
+  }
+}
+.dock {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px;
+  border-radius: 18px;
+  background: rgba(18, 20, 26, 0.92);
+  backdrop-filter: blur(16px);
+  border: 1px solid #1e222b;
+  box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(52, 196, 106, 0.06);
+  animation: floatDock 4s ease-in-out infinite;
+  transition: box-shadow 0.3s;
+  /* nunca quebra em duas linhas nem vaza: rola na horizontal quando não cabe */
+  max-width: calc(100vw - 24px);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.dock::-webkit-scrollbar {
+  display: none;
+}
+.dock:hover {
+  box-shadow: 0 18px 52px -12px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(52, 196, 106, 0.12);
+}
+/* Item = bloco em coluna: ícone em cima, rótulo fixo embaixo (sem hover) */
+.dock a,
+.dock button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 54px;
+  padding: 6px 6px 5px;
+  border-radius: 12px;
+  color: #b4bbc5;
+  text-decoration: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  transition: background-color 0.15s, color 0.15s;
+}
+.dock a .ic-glifo,
+.dock button .ic-glifo {
+  font-size: 15.5px;
+  line-height: 1;
+}
+.dock a .rot,
+.dock button .rot {
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  color: inherit;
+}
+.dock a:hover,
+.dock button:hover {
+  background: #171b22;
+  color: #F4F5F7;
+}
+.dock a.on {
+  background: rgba(52,196,106, 0.1);
+  color: #8cf0b0;
+}
+.dock a.cta {
+  background: linear-gradient(180deg, #6FE39A 0%, #34C46A 100%);
+  color: #06210F;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.16),
+    0 8px 20px -6px rgba(52, 196, 106, 0.45),
+    inset 0 1px 1px rgba(255, 255, 255, 0.5);
+}
+.dock a.cta:hover {
+  background: linear-gradient(180deg, #85EFAB 0%, #45D479 100%);
+  color: #06210F;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.2),
+    0 12px 26px -6px rgba(52, 196, 106, 0.55),
+    inset 0 1px 1px rgba(255, 255, 255, 0.55);
+}
+.dock button.out {
+  color: #7a828f;
+}
+.dock button.out:hover {
+  color: #ff5c7a;
+  background: rgba(255,92,122, 0.06);
+}
+.dock .sep {
+  width: 1px;
+  height: 34px;
+  background: #1e222b;
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* ─── Barra superior flutuante (avatar · busca · sino) ──────────────────── */
+@keyframes floatTop {
+  0%,
+  100% {
+    transform: translateX(-50%) translateY(2px);
+  }
+  50% {
+    transform: translateX(-50%) translateY(-3px);
+  }
+}
+.hbar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 18px;
+  background: rgba(18, 20, 26, 0.92);
+  backdrop-filter: blur(16px);
+  border: 1px solid #1e222b;
+  box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(52, 196, 106, 0.06);
+  animation: floatTop 4s ease-in-out infinite;
+  transition: box-shadow 0.3s;
+}
+.hbar:hover {
+  box-shadow: 0 18px 52px -12px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(52, 196, 106, 0.12);
+}
+.hbar .ic {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 22px;
+  color: #b4bbc5;
+  font-size: 16px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  text-decoration: none;
+  transition: background-color 0.15s, color 0.15s, transform 0.18s;
+}
+.hbar .ic:hover {
+  background: #171b22;
+  color: #F4F5F7;
+  transform: translateY(-4px) scale(1.08);
+}
+.hbar .ic:active {
+  transform: scale(0.95);
+}
+.hbar .av {
+  background: #34c46a;
+  color: #06210F;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.hbar .av:hover {
+  background: #8cf0b0;
+  color: #06210F;
+}
+.hbar .tt {
+  position: absolute;
+  bottom: -38px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #1E222B;
+  color: #F4F5F7;
+  border: 1px solid #2A303B;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s, transform 0.15s;
+  white-space: nowrap;
+}
+.hbar .ic:hover .tt,
+.hbar .search:focus-within .tt {
+  opacity: 1;
+  transform: translateX(-50%) translateY(2px);
+}
+.hbar .sep {
+  width: 1px;
+  height: 26px;
+  background: #1e222b;
+  margin: 0 5px;
+  flex-shrink: 0;
+}
+.hbar .search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  border-radius: 22px;
+  background: #171b22;
+  padding: 0 8px 0 14px;
+  transition: background-color 0.2s, box-shadow 0.2s;
+}
+.hbar .search:focus-within {
+  background: #12141A;
+  box-shadow: inset 0 0 0 1.5px #34c46a, 0 0 0 3px rgba(52,196,106, 0.12);
+}
+.hbar .search input::placeholder { color: #9AA2AF; }
+.hbar .search .lupa {
+  color: #7a828f;
+  font-size: 15px;
+  transition: color 0.2s;
+}
+.hbar .search:focus-within .lupa {
+  color: #34c46a;
+}
+.hbar .search input {
+  width: 210px;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  color: #F4F5F7;
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.hbar .search input:focus {
+  width: 300px;
+}
+/* Dica de atalho de teclado no canto da busca (some ao focar) */
+.hbar .search .kbd-atalho {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: #7a828f;
+  background: #12141A;
+  border: 1px solid #2a303b;
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  transition: opacity 0.15s;
+}
+.hbar .search:focus-within .kbd-atalho {
+  opacity: 0;
+}
+.hbar .bell-dot {
+  position: absolute;
+  right: 9px;
+  top: 9px;
+  height: 7px;
+  width: 7px;
+  border-radius: 9999px;
+  background: #34c46a;
+  animation: pulseDot 2.6s ease-out infinite;
+}
+
+/* Dropdowns ancorados na hbar */
+.hbar-menu {
+  position: absolute;
+  top: 52px;
+  background: #12141A;
+  border: 1px solid #1e222b;
+  border-radius: 16px;
+  box-shadow: 0 18px 52px -12px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(52, 196, 106, 0.12);
+  overflow: hidden;
+  animation: fadeUp 0.2s ease both;
+}
+
+/* A navegação (dock + barra superior) fica sempre visível — não some no scroll. */
+
+/* ─── Onboarding (tour real com spotlight) ──────────────────────────────── */
+.onb-launch {
+  position: fixed;
+  right: 16px;
+  bottom: 120px;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 9999px;
+  background: #12141A;
+  border: 1px solid #1e222b;
+  box-shadow: 0 10px 30px -12px rgba(0,0,0, 0.25);
+  cursor: pointer;
+  color: #34c46a;
+  font-size: 17px;
+  font-weight: 700;
+  transition: transform 0.18s, box-shadow 0.2s;
+}
+.onb-launch:hover {
+  transform: translateY(-3px) scale(1.06);
+  box-shadow: 0 16px 40px -12px rgba(0,0,0, 0.3);
+}
+.onb-launch .onb-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  animation: onbHalo 2.4s ease-out infinite;
+}
+@keyframes onbHalo {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52,196,106, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(52,196,106, 0);
+  }
+}
+.onb-launch .onb-tip {
+  position: absolute;
+  right: 52px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #1E222B;
+  color: #F4F5F7;
+  border: 1px solid #2A303B;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.onb-launch:hover .onb-tip {
+  opacity: 1;
+}
+.onb-buraco {
+  border-radius: 14px;
+  box-shadow: 0 0 0 9999px rgba(17, 24, 39, 0.55), 0 0 0 2px rgba(52,196,106, 0.9) inset;
+  pointer-events: none;
+  transition: top 0.25s ease, left 0.25s ease, width 0.25s ease, height 0.25s ease;
+}
+.onb-balao {
+  background: #12141A;
+  border: 1px solid #1e222b;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px -20px rgba(16, 24, 39, 0.4);
+  padding: 16px 18px;
+  width: min(380px, calc(100vw - 32px));
+  animation: pop-entra 0.2s ease both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .onb-launch .onb-halo {
+    animation: none;
+  }
+}
+
+/* Campo de segredo mascarado por CSS, NÃO por type="password".
+   O gerenciador de senhas do navegador procura input[type=password] e preenche
+   sozinho — com a senha de login do usuário. Como a tela grava "campo
+   preenchido substitui", isso apagava a chave de API que estava funcionando.
+   Um input[type=text] mascarado aqui parece senha para quem olha e é texto
+   comum para o navegador, então ele não encosta. */
+.campo-segredo {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
+.campo-segredo.revelado {
+  -webkit-text-security: none;
+  text-security: none;
+}
