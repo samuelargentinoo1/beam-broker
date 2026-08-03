@@ -1,0 +1,11 @@
+# O .env é da máquina de desenvolvimento: aponta para um Postgres em localhost e
+# carrega segredos locais. Se ele sobe, o build da Vercel LÊ ele e ignora as
+# variáveis configuradas no projeto — foi exatamente o que aconteceu no primeiro
+# deploy. As variáveis de produção vivem no painel da Vercel, não em arquivo.
+.env
+.env.local
+.env.*.local
+
+node_modules
+.next
+.git
