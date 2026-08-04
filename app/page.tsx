@@ -1,4 +1,6 @@
 import { Suspense } from "react";
+import { SEM_BANCO } from "@/lib/sem-banco";
+import { redirect as _redirDemo } from "next/navigation";
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
@@ -32,6 +34,9 @@ function Esqueleto() {
 // consultas. É isso que impede um cliente de Recepção de pagar a latência dos
 // leads que ele nem vê.
 export default async function DashboardPage() {
+  // Vitrine sem banco: esta tela lê o Postgres. Manda para a fila do dia.
+  if (SEM_BANCO) _redirDemo("/meu-dia");
+
   const { imobiliaria } = await exigirSessao();
   const comComercial = temModulo(imobiliaria.modulos, "COMERCIAL");
 

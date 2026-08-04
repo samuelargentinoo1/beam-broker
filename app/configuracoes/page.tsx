@@ -1,4 +1,6 @@
 import { revalidatePath } from "next/cache";
+import { SEM_BANCO } from "@/lib/sem-banco";
+import { redirect as _redirDemo } from "next/navigation";
 import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
@@ -188,6 +190,9 @@ export default async function ConfiguracoesPage({
 }: {
   searchParams: Promise<{ ok?: string; erro?: string; total?: string }>;
 }) {
+  // Vitrine sem banco: esta tela lê o Postgres. Manda para a fila do dia.
+  if (SEM_BANCO) _redirDemo("/meu-dia");
+
   const { imobiliaria, usuario } = await exigirSessao();
   const { ok, erro, total } = await searchParams;
   const ativacao = await statusAtivacao(imobiliaria);

@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { COOKIE_SESSAO, validarToken } from "@/lib/auth";
 import { COOKIE_OPERADOR, validarTokenOperador } from "@/lib/operador-auth";
 
+// Vitrine sem banco: não há Usuario para autenticar, então não há login a
+// exigir — a navegação é aberta e não existe dado real exposto. Com
+// DATABASE_URL configurada a proteção volta inteira. Resolvido no BUILD, porque
+// o middleware roda no edge.
+const SEM_BANCO = !process.env.DATABASE_URL;
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
@@ -10,6 +16,8 @@ export async function middleware(req: NextRequest) {
   const cabecalhos = new Headers(req.headers);
   cabecalhos.set("x-pathname", pathname);
   const seguir = () => NextResponse.next({ request: { headers: cabecalhos } });
+
+  if (SEM_BANCO) return seguir();
 
   // ── Área do OPERADOR (dono do SaaS) ───────────────────────────────────────
   // Universo separado: o cookie de cliente é IGNORADO aqui. Estar logado como

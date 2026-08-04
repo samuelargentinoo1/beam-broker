@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { SEM_BANCO } from "@/lib/sem-banco";
+import NegociosVitrine from "@/components/proto/negocios";
 import { exigirSessao } from "@/lib/sessao";
 import {
   brl,
@@ -19,6 +21,10 @@ export default async function NegociosPage({
 }: {
   searchParams: Promise<{ funil?: string }>;
 }) {
+  // Sem banco não há Funil/Negocio para consultar — entra a versão em memória,
+  // com a mesma operação (pipelines, arrastar, desfecho com motivo).
+  if (SEM_BANCO) return <NegociosVitrine />;
+
   const { imobiliaria } = await exigirSessao();
   // Abrir o módulo já provisiona o funil padrão: um quadro sem colunas não
   // ensina nada e não dá por onde começar.

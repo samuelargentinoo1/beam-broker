@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { SEM_BANCO } from "@/lib/sem-banco";
+import { redirect as _redirDemo } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { exigirSessao } from "@/lib/sessao";
 import { brl } from "@/lib/format";
@@ -21,6 +23,9 @@ const statusLabel = {
 } as const;
 
 export default async function ImoveisPage() {
+  // Vitrine sem banco: esta tela lê o Postgres. Manda para a fila do dia.
+  if (SEM_BANCO) _redirDemo("/meu-dia");
+
   const { imobiliaria } = await exigirSessao();
   const imoveis = await prisma.imovel.findMany({
     where: { imobiliariaId: imobiliaria.id },

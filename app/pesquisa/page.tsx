@@ -2,6 +2,8 @@
 // carteira da imobiliária logada: imóveis, pessoas, contratos, leads e ocorrências.
 
 import Link from "next/link";
+import { SEM_BANCO } from "@/lib/sem-banco";
+import { redirect as _redirDemo } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { exigirSessao } from "@/lib/sessao";
 import { temModulo } from "@/lib/planos";
@@ -17,6 +19,9 @@ export default async function PesquisaPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
+  // Vitrine sem banco: esta tela lê o Postgres. Manda para a fila do dia.
+  if (SEM_BANCO) _redirDemo("/meu-dia");
+
   const { imobiliaria } = await exigirSessao();
   const q = ((await searchParams).q ?? "").trim();
 

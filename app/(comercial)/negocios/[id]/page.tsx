@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { SEM_BANCO } from "@/lib/sem-banco";
 import { prisma } from "@/lib/db";
 import { exigirSessao } from "@/lib/sessao";
 import {
@@ -27,6 +28,8 @@ import NegocioTimeline, { type EventoTimeline } from "@/components/negocio-timel
 export const dynamic = "force-dynamic";
 
 export default async function NegocioPage({ params }: { params: Promise<{ id: string }> }) {
+  if (SEM_BANCO) redirect("/negocios");
+
   const { imobiliaria, usuario } = await exigirSessao();
   const { id } = await params;
 

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { COOKIE_SESSAO } from "@/lib/auth";
+import { SEM_BANCO } from "@/lib/sem-banco";
 import { getSessao } from "@/lib/sessao";
 import { prisma } from "@/lib/db";
 import { BarraSuperior, Dock, type Notificacao } from "@/components/chrome";
@@ -22,6 +23,8 @@ export const metadata: Metadata = {
 
 // Notificações do sino: pendências reais da imobiliária logada
 async function carregarNotificacoes(imobiliariaId: number): Promise<Notificacao[]> {
+  // Vitrine sem banco: o sino fica vazio em vez de derrubar o layout inteiro.
+  if (SEM_BANCO) return [];
   const [atrasadas, abertas, novos] = await Promise.all([
     prisma.fatura.count({
       where: { status: "ATRASADA", contrato: { imovel: { imobiliariaId } } },
@@ -78,9 +81,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     );
   }
 
+  // Na vitrine não há Imovel para contar. `temDados` só governa dicas de tela
+  // vazia, e na vitrine sempre há conteúdo (vem de lib/proto) — então é true.
   const [notificacoes, qtdImoveis] = await Promise.all([
     carregarNotificacoes(sessao.imobiliaria.id),
-    prisma.imovel.count({ where: { imobiliariaId: sessao.imobiliaria.id } }),
+    SEM_BANCO
+      ? Promise.resolve(1)
+      : prisma.imovel.count({ where: { imobiliariaId: sessao.imobiliaria.id } }),
   ]);
   const temDados = qtdImoveis > 0;
 

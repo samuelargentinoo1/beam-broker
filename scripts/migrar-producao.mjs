@@ -36,12 +36,16 @@ const directUrl =
   semPooler(process.env.DATABASE_URL) ??
   process.env.DATABASE_URL;
 
+// Vitrine sem banco: as 13 telas comerciais guardam os dados em memória, então
+// o front sobe inteiro sem Postgres. Abortar aqui só faria sentido se alguma
+// tela precisasse do schema — e no modo vitrine nenhuma precisa.
 if (!process.env.DATABASE_URL) {
-  console.error(
-    "[build] DATABASE_URL ausente — não dá para aplicar as migrations. " +
-      "Configure a connection string do Neon no painel."
+  console.warn(
+    "[build] DATABASE_URL ausente — subindo em MODO VITRINE (sem banco). " +
+      "As telas comerciais rodam com dados em memória; o CRM com persistência " +
+      "fica indisponível. Configure DATABASE_URL e DIRECT_URL para o sistema completo."
   );
-  process.exit(1);
+  process.exit(0);
 }
 
 if (!process.env.DIRECT_URL) {

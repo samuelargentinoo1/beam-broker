@@ -6,12 +6,15 @@ import { redirect } from "next/navigation";
 import { cache } from "react";
 import { prisma } from "@/lib/db";
 import { COOKIE_SESSAO, validarToken } from "@/lib/auth";
+import { SEM_BANCO, SESSAO_DEMO } from "@/lib/sem-banco";
 import type { Imobiliaria, Usuario } from "@prisma/client";
 
 export type Sessao = { usuario: Usuario; imobiliaria: Imobiliaria };
 
 // cache() deduplica por request — várias chamadas na mesma página custam 1 query
 export const getSessao = cache(async (): Promise<Sessao | null> => {
+  // Vitrine sem banco: não há Usuario para consultar; entra direto.
+  if (SEM_BANCO) return SESSAO_DEMO;
   const jar = await cookies();
   const token = await validarToken(jar.get(COOKIE_SESSAO)?.value);
   if (!token) return null;

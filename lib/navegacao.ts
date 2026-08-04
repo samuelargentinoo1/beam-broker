@@ -47,7 +47,11 @@ export const ITENS_NAV: ItemNav[] = [
 ];
 
 export function navVisivel(modulos: string[]): ItemNav[] {
-  return ITENS_NAV.filter((i) => !i.modulo || modulos.includes(i.modulo));
+  const doPlano = ITENS_NAV.filter((i) => !i.modulo || modulos.includes(i.modulo));
+  // Vitrine sem banco: Início e Imóveis leem o Postgres. Em vez de deixar dois
+  // itens que abrem tela de erro, o dock mostra só o que funciona.
+  if (!process.env.DATABASE_URL) return doPlano.filter((i) => i.modulo === "COMERCIAL");
+  return doPlano;
 }
 
 // Agrupa os itens visíveis preservando a ordem dos grupos e DESCARTANDO grupos

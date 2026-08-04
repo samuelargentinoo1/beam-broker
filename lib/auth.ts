@@ -10,7 +10,13 @@ export const COOKIE_SESSAO = "sessao";
 // ser forjado (login como qualquer usuário, cujo id é sequencial). Falha FECHADO
 // já no import do módulo: o app NÃO sobe degradado. Em produção defina uma env
 // forte; em desenvolvimento defina no .env (o .env.example traz um exemplo).
-const SECRET = process.env.AUTH_SECRET;
+// Exceção da VITRINE (sem DATABASE_URL): não existe Usuario, sessão nem dado
+// real para proteger — a tela toda é fixture em memória. Um segredo fixo aqui
+// não enfraquece nada porque não há sessão para forjar. Havendo banco, a regra
+// volta a valer inteira e o app se recusa a subir sem segredo forte.
+const SECRET =
+  process.env.AUTH_SECRET ??
+  (!process.env.DATABASE_URL ? "vitrine-sem-banco-nao-ha-sessao-real-0" : undefined);
 if (!SECRET || SECRET.length < 32) {
   throw new Error(
     "AUTH_SECRET ausente ou curta demais (mínimo 32 caracteres). Gere com: openssl rand -hex 32"
